@@ -1,0 +1,34 @@
+﻿# === Python ===
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+
+# === Android Studio ===
+*.iml
+.gradle/
+/local.properties
+.DS_Store
+/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*/build/
+
+# === Keil / STM32 ===
+*.o
+*.d
+*.crf
+*.lst
+*.map
+*.hex
+*.axf
+*.bak
+*.dep
+*.lnp
+*.uvgui.*
+*.uvoptx
+*.uvguix.*
+Objects/
+Listings/

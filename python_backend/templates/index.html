@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoRa 环境监测大屏</title>
+    <!-- 引入 Tailwind CSS 进行工业级暗黑风 UI 布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Apache ECharts 图表库 -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        }
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body class="min-h-screen p-6 flex flex-col">
+
+    <!-- 顶部导航栏 (Header) -->
+    <header class="flex justify-between items-center mb-6 glass-panel p-4">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded bg-blue-600/20 flex items-center justify-center border border-blue-500/50">
+                <span class="text-blue-400 font-bold text-xl">📡</span>
+            </div>
+            <h1 class="text-2xl font-bold tracking-wider">LORA<span class="text-blue-400">NET</span> 监测枢纽</h1>
+        </div>
+        <div class="flex items-center gap-2">
+            <div id="status-indicator" class="w-3 h-3 rounded-full bg-green-500 animate-pulse shadow-[0_0_8px_#22c55e]"></div>
+            <span id="status-text" class="font-mono text-sm tracking-widest text-green-400">SYSTEM ONLINE</span>
+        </div>
+    </header>
+
+    <!-- 顶部数据看板 (KPI Cards) -->
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <!-- 温度卡片 -->
+        <div id="card-temp" class="glass-panel p-6 flex items-center justify-between transition-colors duration-500">
+            <div>
+                <p class="text-gray-400 text-sm font-semibold tracking-wider uppercase mb-1">实时温度 (Temp)</p>
+                <div class="flex items-baseline gap-2">
+                    <span id="kpi-temp" class="text-4xl font-bold text-orange-400 font-mono">--</span>
+                    <span class="text-orange-400/70 text-lg">°C</span>
+                </div>
+            </div>
+            <div class="text-5xl opacity-20">🌡️</div>
+        </div>
+        
+        <!-- 湿度卡片 -->
+        <div class="glass-panel p-6 flex items-center justify-between">
+            <div>
+                <p class="text-gray-400 text-sm font-semibold tracking-wider uppercase mb-1">实时湿度 (Humidity)</p>
+                <div class="flex items-baseline gap-2">
+                    <span id="kpi-hum" class="text-4xl font-bold text-cyan-400 font-mono">--</span>
+                    <span class="text-cyan-400/70 text-lg">%</span>
+                </div>
+            </div>
+            <div class="text-5xl opacity-20">💧</div>
+        </div>
+
+        <!-- 状态卡片 -->
+        <div class="glass-panel p-6 flex items-center justify-between">
+            <div>
+                <p class="text-gray-400 text-sm font-semibold tracking-wider uppercase mb-1">最后同步时间 (Sync Time)</p>
+                <div class="flex items-baseline gap-2">
+                    <span id="kpi-time" class="text-3xl font-bold text-gray-200 font-mono">--:--:--</span>
+                </div>
+            </div>
+            <div class="text-5xl opacity-20">⏱️</div>
+        </div>
+    </section>
+
+    <!-- 图表容器 (Chart Container) -->
+    <main class="flex-1 glass-panel p-6 relative w-full h-full flex flex-col">
+        <div class="flex flex-wrap justify-between items-center border-b border-gray-700 pb-3 mb-4 gap-4">
+            <h2 class="text-lg text-gray-400 font-semibold uppercase tracking-wider flex items-center gap-2">
+                <span>📈</span> 实时温湿度双轨数据流 (Live Telemetry)
+            </h2>
+            
+            <!-- 控制按钮组 -->
+            <div class="flex gap-3">
+                <button id="btn-toggle" class="px-4 py-2 rounded bg-blue-600/80 hover:bg-blue-500 text-white text-sm font-medium transition-all border border-blue-400/50 flex items-center gap-2 shadow-lg">
+                    <span id="icon-toggle">⏸️</span> <span id="text-toggle">暂停监控</span>
+                </button>
+                <button id="btn-export" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium transition-all border border-slate-500/50 flex items-center gap-2 shadow-lg">
+                    <span>📥</span> 导出 CSV
+                </button>
+            </div>
+        </div>
+
+        <!-- ECharts 挂载点 -->
+        <div id="chart" class="flex-1 w-full min-h-[400px]"></div>
+    </main>
+
+    <!-- 独立的前端逻辑脚本 (Frontend Logic Script) -->
+    <script>
+        // 1. 初始化 ECharts 实例，绑定到 DOM 元素
+        var chartDom = document.getElementById('chart');
+        var myChart = echarts.init(chartDom, 'dark'); // 启用自带的暗色主题
+
+        // 全局状态变量
+        let isPaused = false;
+        let currentChartData = { time: [], temp: [], hum: [] }; // 用于导出的数据缓存
+
+        // 2. 基础配置项 (Configuration)
+        var option = {
+            backgroundColor: 'transparent',
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } }
+            },
+            legend: {
+                data: ['环境温度 (°C)', '相对湿度 (%)'],
+                textStyle: { color: '#cbd5e1' },
+                top: 0
+            },
+            grid: {
+                left: '2%', right: '2%', bottom: '2%', containLabel: true
+            },
+            xAxis: [
+                {
+                    type: 'category',
+                    boundaryGap: false,
+                    data: [], // X轴时间数据将由 AJAX 动态填充
+                    axisLine: { lineStyle: { color: '#475569' } },
+                    axisLabel: { color: '#94a3b8' }
+                }
+            ],
+            yAxis: [
+                {
+                    type: 'value',
+                    name: '温度 (°C)',
+                    position: 'left',
+                    axisLine: { show: true, lineStyle: { color: '#f97316' } }, // 橙色
+                    splitLine: { lineStyle: { color: '#334155', type: 'dashed' } },
+                    axisLabel: { color: '#f97316' }
+                },
+                {
+                    type: 'value',
+                    name: '湿度 (%)',
+                    position: 'right',
+                    axisLine: { show: true, lineStyle: { color: '#06b6d4' } }, // 蓝绿色
+                    splitLine: { show: false },
+                    axisLabel: { color: '#06b6d4' }
+                }
+            ],
+            series: [
+                {
+                    name: '环境温度 (°C)',
+                    type: 'line',
+                    yAxisIndex: 0,
+                    smooth: true,       // 开启曲线平滑
+                    symbolSize: 6,      // 数据点大小
+                    itemStyle: { color: '#f97316' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(249, 115, 22, 0.5)' },
+                            { offset: 1, color: 'rgba(249, 115, 22, 0.05)' }
+                        ])
+                    },
+                    data: [] // 温度数据将由 AJAX 动态填充
+                },
+                {
+                    name: '相对湿度 (%)',
+                    type: 'line',
+                    yAxisIndex: 1,
+                    smooth: true,
+                    symbolSize: 6,
+                    itemStyle: { color: '#06b6d4' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(6, 182, 212, 0.5)' },
+                            { offset: 1, color: 'rgba(6, 182, 212, 0.05)' }
+                        ])
+                    },
+                    data: [] // 湿度数据将由 AJAX 动态填充
+                }
+            ]
+        };
+
+        // 将基础配置装载到图表实例
+        myChart.setOption(option);
+
+        // 更新 KPI 面板和报警逻辑
+        function updateKPIs(data) {
+            if (data.time.length === 0) return;
+            
+            // 获取最新的一条数据
+            const latestTemp = data.temp[data.temp.length - 1];
+            const latestHum = data.hum[data.hum.length - 1];
+            const latestTime = data.time[data.time.length - 1];
+
+            // 更新 DOM
+            document.getElementById('kpi-temp').innerText = parseFloat(latestTemp).toFixed(1);
+            document.getElementById('kpi-hum').innerText = parseFloat(latestHum).toFixed(1);
+            document.getElementById('kpi-time').innerText = latestTime;
+
+            // 报警逻辑：温度大于 30 度时视觉警告
+            const tempCard = document.getElementById('card-temp');
+            const statusInd = document.getElementById('status-indicator');
+            const statusTxt = document.getElementById('status-text');
+
+            if (latestTemp > 30.0) {
+                // 卡片变红
+                tempCard.classList.add('bg-red-900/40', 'border-red-500');
+                // 顶部状态变红并闪烁
+                statusInd.classList.replace('bg-green-500', 'bg-red-500');
+                statusInd.classList.replace('shadow-[0_0_8px_#22c55e]', 'shadow-[0_0_12px_#ef4444]');
+                statusTxt.classList.replace('text-green-400', 'text-red-400');
+                statusTxt.innerText = 'TEMP WARNING';
+            } else {
+                // 恢复正常样式
+                tempCard.classList.remove('bg-red-900/40', 'border-red-500');
+                statusInd.classList.replace('bg-red-500', 'bg-green-500');
+                statusInd.classList.replace('shadow-[0_0_12px_#ef4444]', 'shadow-[0_0_8px_#22c55e]');
+                statusTxt.classList.replace('text-red-400', 'text-green-400');
+                statusTxt.innerText = 'SYSTEM ONLINE';
+            }
+        }
+
+        // 3. 数据抓取与更新引擎 (Data Fetch & Update Engine)
+        function fetchAndUpdateChart() {
+            if (isPaused) return; // 如果处于暂停状态，则跳过本次更新
+
+            // 向 Flask 后端发起请求
+            fetch('http://127.0.0.1:5000/data')
+                .then(response => {
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    return response.json();
+                })
+                .then(data => {
+                    if (!data.time || data.time.length === 0) {
+                        console.warn('Backend returned empty data.');
+                        return;
+                    }
+
+                    // 缓存数据用于导出
+                    currentChartData = data;
+
+                    // 更新顶部看板
+                    updateKPIs(data);
+
+                    // 增量更新图表数据
+                    myChart.setOption({
+                        xAxis: { data: data.time },
+                        series: [
+                            { data: data.temp },
+                            { data: data.hum }
+                        ]
+                    });
+                })
+                .catch(error => console.error('Error fetching sensor data:', error));
+        }
+
+        // --- 事件监听器绑定 ---
+
+        // 暂停/恢复按钮逻辑
+        document.getElementById('btn-toggle').addEventListener('click', function() {
+            isPaused = !isPaused;
+            const btnText = document.getElementById('text-toggle');
+            const btnIcon = document.getElementById('icon-toggle');
+            
+            if (isPaused) {
+                // 切换为恢复模式 (黄色 UI)
+                btnText.innerText = '恢复监控';
+                btnIcon.innerText = '▶️';
+                this.classList.replace('bg-blue-600/80', 'bg-amber-600/80');
+                this.classList.replace('hover:bg-blue-500', 'hover:bg-amber-500');
+                this.classList.replace('border-blue-400/50', 'border-amber-400/50');
+            } else {
+                // 切换回暂停模式 (蓝色 UI)
+                btnText.innerText = '暂停监控';
+                btnIcon.innerText = '⏸️';
+                this.classList.replace('bg-amber-600/80', 'bg-blue-600/80');
+                this.classList.replace('hover:bg-amber-500', 'hover:bg-blue-500');
+                this.classList.replace('border-amber-400/50', 'border-blue-400/50');
+                // 恢复时立即拉取一次最新数据
+                fetchAndUpdateChart();
+            }
+        });
+
+        // 导出 CSV 逻辑
+        document.getElementById('btn-export').addEventListener('click', function() {
+            if (currentChartData.time.length === 0) {
+                alert("暂无数据可导出");
+                return;
+            }
+            
+            // 构建 CSV 字符串
+            // 添加 BOM 头，防止 Excel 打开中文乱码
+            let csvContent = '\uFEFF'; 
+            csvContent += "时间,温度(°C),湿度(%)\n";
+            
+            for (let i = 0; i < currentChartData.time.length; i++) {
+                csvContent += `${currentChartData.time[i]},${currentChartData.temp[i]},${currentChartData.hum[i]}\n`;
+            }
+            
+            // 创建 Blob 并下载
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `lora_telemetry_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
+        // --- 初始化与定时器 ---
+        
+        fetchAndUpdateChart(); // 首次立即执行
+        setInterval(fetchAndUpdateChart, 2000); // 设置定时器，每 2000ms 轮询一次
+
+        // 响应式处理：窗口大小改变时重绘
+        window.addEventListener('resize', function() {
+            myChart.resize();
+        });
+    </script>
+</body>
+</html>
